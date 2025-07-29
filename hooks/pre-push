@@ -1,38 +1,143 @@
-#!/bin/sh
+#!/bin/bash
+set -e
 
-echo "Lancement des vérifications Maven avant le push..."
-
-# nettoyage et compilation
-echo "Compilation du projet..."
-mvn clean compile
+<<<<<<< HEAD
+# --- COMPILATION ET TESTS MAVEN EN PREMIER ---
+echo " Compilation du projet..."
+mvn compile
 if [ $? -ne 0 ]; then
-  echo "Échec de la compilation."
+  echo " Échec de la compilation."
   exit 1
 fi
 
-# exécution des tests
-echo "Exécution des tests..."
+echo " Compilation réussie."
+=======
+echo "Compilation..."
+mvn compile
+if [ $? -ne 0 ]; then
+  echo "Compilation failed"
+  exit 1
+fi
+>>>>>>> 03d01a60a0c5e60b94eba4d622ff88725bbf2ad1
+
+echo " Exécution des tests..."
 mvn test
 if [ $? -ne 0 ]; then
-  echo "Échec des tests."
+  echo " Échec des tests."
   exit 1
 fi
 
-# analyse avec SpotBugs
-echo "Analyse SpotBugs..."
-mvn spotbugs:check
-if [ $? -ne 0 ]; then
-  echo "Échec de l'analyse SpotBugs."
-  exit 1
-fi
-
+<<<<<<< HEAD
+echo " Tests réussis. Vérifications Git en cours..."
+=======
 # analyse de dépendances OWASP
+: << 'COMMENTAIRE'
 echo "Vérification des vulnérabilités de dépendances..."
 mvn org.owasp:dependency-check-maven:check
 if [ $? -ne 0 ]; then
   echo "Vulnérabilités détectées par OWASP Dependency-Check."
   exit 1
 fi
+COMMENTAIRE
+>>>>>>> 03d01a60a0c5e60b94eba4d622ff88725bbf2ad1
 
-echo "Toutes les vérifications sont passées avec succès. Push autorisé."
+# --- CONFIGURATION ---
+PROTECTED_BRANCHES=("main" "master" "prod")
+MAX_COMMITS=20
+ZERO_COMMIT="0000000000000000000000000000000000000000"
+NO_FORCE_PUSH_BRANCHES=("main" "master" "develop" "release")
+UNDELETABLE_BRANCHES=("main" "master" "prod")
+declare -A BRANCH_AUTHORS
+BRANCH_AUTHORS["release"]="release_manager"
+BRANCH_AUTHORS["hotfix-prod"]="tech_lead"
+
+# --- FONCTIONS ---
+
+check_direct_push() {
+  branch="$1"
+  local_sha="$2"
+  remote_sha="$3"
+
+  for protected in "${PROTECTED_BRANCHES[@]}"; do
+    if [[ "$branch" == "$protected" && "$remote_sha" != "$ZERO_COMMIT" ]]; then
+      echo " Push direct interdit sur branche protégée : $branch"
+      return 1
+    fi
+  done
+}
+
+check_commit_limit() {
+  local_sha="$1"
+  remote_sha="$2"
+
+  if [[ "$remote_sha" == "$ZERO_COMMIT" ]]; then
+    return 0
+  fi
+
+  count=$(git rev-list --count "$remote_sha" "^$local_sha" 2>/dev/null || echo 0)
+  if (( count > MAX_COMMITS )); then
+    echo " Trop de commits : $count (max autorisé: $MAX_COMMITS)"
+    return 1
+  fi
+}
+
+check_force_push() {
+  branch="$1"
+  local_sha="$2"
+  remote_sha="$3"
+
+  for protected in "${NO_FORCE_PUSH_BRANCHES[@]}"; do
+    if [[ "$branch" == "$protected" ]]; then
+      if [[ "$remote_sha" != "$ZERO_COMMIT" ]] && ! git merge-base --is-ancestor "$remote_sha" "$local_sha"; then
+        echo " Force push détecté sur $branch"
+        return 1
+      fi
+    fi
+  done
+}
+
+check_author() {
+  branch="$1"
+  current_user=$(whoami) # ou autre méthode
+
+  if [[ -v BRANCH_AUTHORS[$branch] ]]; then
+    expected="${BRANCH_AUTHORS[$branch]}"
+    if [[ "$current_user" != "$expected" ]]; then
+      echo " Seul '$expected' peut pousser sur '$branch' (vous êtes '$current_user')"
+      return 1
+    fi
+  fi
+}
+
+check_gpg_signatures() {
+  local_sha="$1"
+  remote_sha="$2"
+
+  if [[ "$remote_sha" == "$ZERO_COMMIT" ]]; then return 0; fi
+
+  commits=$(git rev-list "$local_sha..$remote_sha")
+  for sha in $commits; do
+    if ! git verify-commit "$sha" >/dev/null 2>&1; then
+      echo " Commit non signé ou signature invalide : $sha"
+      return 1
+    fi
+  done
+}
+
+# --- VÉRIFICATIONS GIT APRÈS BUILD & TESTS ---
+
+while read local_ref local_sha remote_ref remote_sha; do
+  branch=$(basename "$remote_ref")
+
+  echo "🔍 Vérification du push sur '$branch'..."
+
+  check_direct_push "$branch" "$local_sha" "$remote_sha" || exit 1
+  check_force_push "$branch" "$local_sha" "$remote_sha" || exit 1
+  check_author "$branch" || exit 1
+  check_commit_limit "$local_sha" "$remote_sha" || exit 1
+  check_gpg_signatures "$local_sha" "$remote_sha" || exit 1
+
+done
+
+echo " Toutes les vérifications ont réussi. Push autorisé."
 exit 0

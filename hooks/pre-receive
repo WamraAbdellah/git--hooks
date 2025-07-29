@@ -1,0 +1,129 @@
+#!/bin/bash
+#
+# HOOK GIT PRE-RECEIVE COMPLET
+#
+# Ce script s'exécute une fois par push et vérifie :
+# 1. Que personne ne pousse directement sur les branches protégées (ex: main, prod).
+# 2. Que le nombre de nouveaux commits poussés sur une branche ne dépasse pas une limite.
+# 3. Que tous les nouveaux commits sont signés avec une clé GPG valide et reconnue par le serveur.
+#
+# Le script s'arrête et rejette le push dès que la première erreur est trouvée.
+#
+
+# --- CONFIGURATION ---
+PROTECTED_BRANCHES=("main" "master" "prod" "production")
+MAX_COMMITS=20 # Limite de commits par branche dans un seul push
+ZERO_COMMIT="0000000000000000000000000000000000000000"
+
+# --- FONCTIONS DE VÉRIFICATION ---
+
+# Fonction 1: Vérifie les pushes directs vers les branches protégées
+check_direct_push() {
+    local old_rev="$1"
+    local ref_name="$2"
+    local branch_name=$(basename "$ref_name")
+
+    # On ne vérifie que les mises à jour de branches, pas les créations
+    if [ "$old_rev" == "$ZERO_COMMIT" ]; then
+        return 0
+    fi
+    
+    for protected_branch in "${PROTECTED_BRANCHES[@]}"; do
+        if [[ "$branch_name" == "$protected_branch" ]]; then
+            echo "----------------------------------------------------------------" >&2
+            echo "ERREUR: PUSH REJETÉ" >&2
+            echo "Les pushes directs vers la branche protégée '$branch_name' sont interdits." >&2
+            echo "Veuillez utiliser une Pull Request (ou Merge Request) pour intégrer vos modifications." >&2
+            echo "----------------------------------------------------------------" >&2
+            return 1 # Échec
+        fi
+    done
+    return 0 # Succès
+}
+
+# Fonction 2: Limite le nombre de commits
+check_commit_limit() {
+    local old_rev="$1"
+    local new_rev="$2"
+    local ref_name="$3"
+
+    # Ne s'applique pas à la suppression de branche
+    if [ "$new_rev" == "$ZERO_COMMIT" ]; then
+        return 0
+    fi
+    
+    # Calculer le nombre de commits
+    if [ "$old_rev" == "$ZERO_COMMIT" ]; then
+        # Nouvelle branche
+        commit_count=$(git rev-list --count "$new_rev")
+    else
+        # Mise à jour de branche
+        commit_count=$(git rev-list --count "$old_rev..$new_rev")
+    fi
+
+    if (( commit_count > MAX_COMMITS )); then
+        local branch_name=$(basename "$ref_name")
+        echo "----------------------------------------------------------------" >&2
+        echo "ERREUR: PUSH REJETÉ" >&2
+        echo "Votre push vers la branche '$branch_name' contient $commit_count commits." >&2
+        echo "La limite est fixée à $MAX_COMMITS commits par push." >&2
+        echo "Veuillez squasher vos commits ou les pusher en plus petits lots." >&2
+        echo "----------------------------------------------------------------" >&2
+        return 1 # Échec
+    fi
+    return 0 # Succès
+}
+
+# Fonction 3: Vérifie les signatures GPG
+check_gpg_signatures() {
+    local old_rev="$1"
+    local new_rev="$2"
+
+    # Ne s'applique pas à la suppression de branche
+    if [ "$new_rev" == "$ZERO_COMMIT" ]; then
+        return 0
+    fi
+
+    # Obtenir la liste des SHAs des nouveaux commits
+    if [ "$old_rev" == "$ZERO_COMMIT" ]; then
+        commit_list=$(git rev-list "$new_rev")
+    else
+        commit_list=$(git rev-list "$old_rev..$new_rev")
+    fi
+
+    if [ -z "$commit_list" ]; then
+        return 0
+    fi
+
+    # Vérifier la signature de chaque commit
+    for commit_sha in $commit_list; do
+        # `verify-commit` retourne 0 si la signature est bonne ET de confiance
+        if ! git verify-commit "$commit_sha" >/dev/null 2>&1; then
+            echo "----------------------------------------------------------------" >&2
+            echo "ERREUR: PUSH REJETÉ" >&2
+            echo "Le commit $commit_sha n'est pas signé ou sa signature GPG est invalide/non fiable." >&2
+            echo "Tous les commits doivent avoir une signature GPG valide." >&2
+            echo "Assurez-vous que la clé GPG publique de l'auteur du commit est importée sur le serveur." >&2
+            echo "----------------------------------------------------------------" >&2
+            return 1 # Échec
+        fi
+    done
+    return 0 # Succès
+}
+
+# --- SCRIPT PRINCIPAL ---
+
+# Lire chaque référence (branche/tag) envoyée par le client git
+while read old_rev new_rev ref_name; do
+    # On applique les règles uniquement aux branches (refs/heads/)
+    if [[ ! $ref_name =~ ^refs/heads/ ]]; then
+        continue
+    fi
+
+    # Exécuter chaque vérification. Si l'une échoue, le script entier s'arrête.
+    check_direct_push "$old_rev" "$ref_name" || exit 1
+    check_commit_limit "$old_rev" "$new_rev" "$ref_name" || exit 1
+    check_gpg_signatures "$old_rev" "$new_rev" || exit 1
+done
+
+exit 0 # Toutes les vérifications ont réussi, le push est accepté
