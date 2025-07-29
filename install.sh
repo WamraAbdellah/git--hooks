@@ -77,11 +77,12 @@ for hook_file in "$HOOKS_SOURCE"/*; do
     if [ -f "$hook_file" ]; then
         hook_name=$(basename "$hook_file")
         
-        # Skip non-hook files (like README, etc.)
-        if [[ ! "$hook_name" =~ ^(pre-commit|post-commit|pre-push|post-receive|pre-receive|update|post-update|pre-rebase|post-checkout|post-merge|pre-auto-gc|post-rewrite|commit-msg|prepare-commit-msg|applypatch-msg|pre-applypatch|post-applypatch)$ ]]; then
+        # Optional: Skip README or hidden files
+        if [[ "$hook_name" == "README"* || "$hook_name" == .* ]]; then
             warn "Skipping non-hook file: $hook_name"
             continue
         fi
+
         
         # Copy hook file
         cp "$hook_file" "$HOOKS_DIR/$hook_name"
