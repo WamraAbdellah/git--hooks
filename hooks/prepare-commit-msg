@@ -1,0 +1,42 @@
+#!/bin/sh
+
+# Fichier de message de commit fourni par Git
+COMMIT_MSG_FILE=$1
+COMMIT_SOURCE=$2
+
+# Ne rien faire si merge ou squash
+if [ "$COMMIT_SOURCE" = "merge" ] || [ "$COMMIT_SOURCE" = "squash" ]; then
+  exit 0
+fi
+
+# Récupérer le nom de la branche courante
+BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+if [ $? -ne 0 ]; then
+  echo "ERREUR : impossible de récupérer le nom de la branche." >&2
+  exit 1
+fi
+
+# Extraire l’ID de ticket (ex: SOD-1234)
+TICKET_ID=$(echo "$BRANCH_NAME" | grep -oE '[A-Z]{2,}-[0-9]+')
+
+# Si aucun ticket trouvé, ne rien faire
+if [ -z "$TICKET_ID" ]; then
+  exit 0
+fi
+
+# Lire la première ligne du message de commit
+FIRST_LINE=$(head -n 1 "$COMMIT_MSG_FILE")
+
+# Vérifier si le ticket est déjà présent
+echo "$FIRST_LINE" | grep -q "^$TICKET_ID:"
+if [ $? -ne 0 ]; then
+  # Sauvegarder une copie de sécurité
+  cp "$COMMIT_MSG_FILE" "$COMMIT_MSG_FILE.bak"
+
+  # Préfixer le message avec le ticket
+  echo "$TICKET_ID: $FIRST_LINE" > "$COMMIT_MSG_FILE.tmp"
+  tail -n +2 "$COMMIT_MSG_FILE" >> "$COMMIT_MSG_FILE.tmp"
+  mv "$COMMIT_MSG_FILE.tmp" "$COMMIT_MSG_FILE"
+fi
+
+exit 0
